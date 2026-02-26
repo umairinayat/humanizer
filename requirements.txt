@@ -1,0 +1,16 @@
+torch>=2.1.0
+transformers>=4.40.0
+peft>=0.12.0
+bitsandbytes>=0.43.0
+accelerate>=0.30.0
+trl>=0.9.0
+datasets>=4.0.0
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+wandb>=0.17.0
+scikit-learn>=1.4.0
+nltk>=3.8.0
+pandas>=2.2.0
+tqdm>=4.66.0
+jsonlines>=4.0.0
+xxhash>=3.4.0
