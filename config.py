@@ -102,25 +102,25 @@ DATASETS = [
         "repo": "silentone0725/ai-human-text-detection-v1",
         "text_col": "text",
         "label_col": "label",
-        "human_value": 0,
+        "human_value": "human",  # labels are strings: "human" / "ai"
         "subset": None,
         "split": "train",
     },
     {
         "name": "human_ai_generated",
         "repo": "dmitva/human_ai_generated_text",
-        "text_col": "text",
-        "label_col": "source",
-        "human_value": "human",
+        "text_col": "human_text",  # actual column name is human_text
+        "label_col": None,  # all rows contain human text in human_text column
+        "human_value": None,
         "subset": None,
         "split": "train",
     },
     {
         "name": "ai_and_human_text",
         "repo": "NabeelShar/ai_and_human_text",
-        "text_col": "Text",
-        "label_col": "Label",
-        "human_value": 0,  # 0 = human, 1 = AI
+        "text_col": "text",  # lowercase in actual dataset
+        "label_col": "generated",  # actual column: 0 = human, 1 = AI
+        "human_value": 0,
         "subset": None,
         "split": "train",
     },
