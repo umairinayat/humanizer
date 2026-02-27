@@ -135,3 +135,35 @@ python train.py --epochs 3 --lr 2e-4 --batch_size 2 --lora_r 64
 ## License
 
 This project is for legitimate model adaptation (domain tone, task quality, style consistency). It is **not** intended for bypassing AI detectors or misrepresenting authorship.
+
+---
+
+## Standalone Unified Pipeline (`full_pipeline.py`)
+
+For ease of use across different systems, the entire workflow (download → prepare → train) has been consolidated into a single standalone script: `full_pipeline.py`. 
+
+This script automatically handles the creation of all required directories (`data`, `logs`, `checkpoints`, `adapter`), making it fully portable.
+
+**To run the complete end-to-end pipeline:**
+```bash
+python full_pipeline.py
+```
+
+**Common CLI Overrides:**
+
+You can skip steps if you already have the data, or configure the hyperparameters directly from the command line:
+
+```bash
+# Skip dataset download but run prepare + train
+python full_pipeline.py --skip_download
+
+# Skip both download and prepare (jump straight to training)
+python full_pipeline.py --skip_download --skip_prepare
+
+# Train with specific hyperparameters (disabling WandB logging)
+python full_pipeline.py --no_wandb \
+    --epochs 1 \
+    --batch_size 4 \
+    --max_train_samples 500000 \
+    --lr 2e-4
+```
