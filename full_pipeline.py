@@ -604,6 +604,10 @@ def main():
     parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint path")
     args = parser.parse_args()
 
+    # Automatically create all required directories
+    for directory in [DATA_DIR, RAW_DIR, SPLITS_DIR, CHECKPOINT_DIR, ADAPTER_DIR, LOG_DIR, LOG_DIR / "tensorboard"]:
+        directory.mkdir(parents=True, exist_ok=True)
+
     banner("HUMANIZER UNIFIED PIPELINE")
     steps = []
     if not args.skip_download:
