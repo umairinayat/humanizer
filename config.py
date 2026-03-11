@@ -48,7 +48,7 @@ LORA = {
 
 # ── Training Hyperparameters ──────────────────────────────────────────
 TRAINING = {
-    "num_train_epochs": 2,
+    "num_train_epochs": 1,
     "per_device_train_batch_size": 4,
     "per_device_eval_batch_size": 4,
     "gradient_accumulation_steps": 4,  # effective batch = 16
@@ -62,9 +62,9 @@ TRAINING = {
     "bf16": True,
     "logging_steps": 25,
     "eval_strategy": "steps",
-    "eval_steps": 200,
+    "eval_steps": 7000,
     "save_strategy": "steps",
-    "save_steps": 500,
+    "save_steps": 7000,
     "save_total_limit": 3,
     "load_best_model_at_end": True,
     "metric_for_best_model": "eval_loss",

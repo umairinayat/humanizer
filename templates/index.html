@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Humanizer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0d10;--surface:#14161b;--card:#1b1e25;--border:#2a2e38;
+  --accent:#7c8cf5;--accent-glow:#7c8cf540;--ok:#4ade80;--err:#f87171;
+  --warn:#fbbf24;--text:#e4e4e7;--dim:#71717a;--radius:10px;
+}
+body{font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+
+/* Layout */
+.app{max-width:1200px;margin:0 auto;padding:28px 20px}
+
+/* Header */
+.header{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.header h1{font-size:1.5rem;font-weight:700;background:linear-gradient(135deg,var(--accent),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.badge{font-size:.65rem;padding:3px 8px;border-radius:20px;background:var(--card);border:1px solid var(--border);color:var(--dim);font-weight:500}
+.badge.ready{border-color:var(--ok);color:var(--ok)}
+
+/* Controls bar */
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:20px}
+.ctrl-group{display:flex;flex-direction:column;gap:3px}
+.ctrl-group label{font-size:.68rem;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);font-weight:600}
+.ctrl-group input[type=range]{width:100px;accent-color:var(--accent);height:4px}
+.ctrl-val{font-size:.72rem;color:var(--accent);font-weight:700;text-align:center}
+.ctrl-check{display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--text);cursor:pointer;user-select:none}
+.ctrl-check input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+.ctrl-sep{width:1px;height:36px;background:var(--border);align-self:center}
+
+/* Editor panels */
+.editor{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:768px){.editor{grid-template-columns:1fr}}
+.pane{display:flex;flex-direction:column;gap:6px}
+.pane-head{display:flex;align-items:center;justify-content:space-between}
+.pane-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);font-weight:600}
+.word-count{font-size:.68rem;color:var(--dim);font-variant-numeric:tabular-nums}
+textarea{width:100%;height:300px;resize:vertical;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-size:.88rem;line-height:1.65;font-family:inherit;transition:border-color .2s}
+textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+textarea[readonly]{cursor:default}
+#output{background:#111318}
+
+/* Raw output */
+.raw-panel{margin-bottom:16px;display:none}
+.raw-panel textarea{height:200px;background:#0d1017;border-color:#1e3a5f;color:#93c5fd;font-size:.82rem}
+
+/* Actions */
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center}
+.btn{padding:10px 24px;border:none;border-radius:8px;font-size:.84rem;cursor:pointer;font-weight:600;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+.btn:active{transform:scale(.97)}
+.btn-go{background:linear-gradient(135deg,var(--accent),#6366f1);color:#fff;box-shadow:0 2px 12px var(--accent-glow)}
+.btn-go:hover{box-shadow:0 4px 20px var(--accent-glow)}
+.btn-go:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btn-sec{background:var(--card);color:var(--text);border:1px solid var(--border)}
+.btn-sec:hover{border-color:var(--accent);color:var(--accent)}
+.spinner{display:none;width:14px;height:14px;border:2px solid #fff4;border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
+.btn-go:disabled .spinner{display:inline-block}
+.btn-go:disabled .btn-label{display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.shortcut{font-size:.68rem;color:var(--dim);align-self:center;margin-left:4px}
+
+/* Chunk progress */
+.progress-section{margin-bottom:20px;display:none}
+.progress-header{font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);font-weight:600;margin-bottom:8px}
+.chunk-bar{display:flex;flex-wrap:wrap;gap:5px}
+.chip{min-width:52px;height:30px;border-radius:6px;background:var(--card);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--dim);font-weight:500;transition:all .25s}
+.chip.running{border-color:var(--warn);color:var(--warn);animation:pulse .8s ease-in-out infinite alternate}
+.chip.done{border-color:var(--ok);color:var(--ok);background:#0f1f13}
+.chip.error{border-color:var(--err);color:var(--err);background:#1f0f0f}
+@keyframes pulse{from{opacity:.55}to{opacity:1}}
+
+/* Stats */
+.stats-bar{display:flex;flex-wrap:wrap;gap:20px;font-size:.76rem;color:var(--dim);padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
+.stat b{color:var(--text);font-weight:600}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>Humanizer</h1>
+    <span class="badge" id="badge">connecting&hellip;</span>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>Words / Chunk</label>
+      <input type="range" id="wpc" min="80" max="400" step="20" value="200"/>
+      <span class="ctrl-val" id="wpcV">200</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Max Tokens</label>
+      <input type="range" id="mt" min="128" max="1024" step="64" value="512"/>
+      <span class="ctrl-val" id="mtV">512</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Temperature</label>
+      <input type="range" id="temp" min="0.30" max="1.20" step="0.05" value="0.85"/>
+      <span class="ctrl-val" id="tempV">0.85</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Top-p</label>
+      <input type="range" id="tp" min="0.50" max="1.00" step="0.02" value="0.92"/>
+      <span class="ctrl-val" id="tpV">0.92</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Rep Penalty</label>
+      <input type="range" id="rp" min="1.00" max="1.50" step="0.05" value="1.20"/>
+      <span class="ctrl-val" id="rpV">1.20</span>
+    </div>
+    <div class="ctrl-sep"></div>
+    <label class="ctrl-check"><input type="checkbox" id="postProcess" checked/>Post-process</label>
+    <label class="ctrl-check"><input type="checkbox" id="showRaw"/>Show raw output</label>
+  </div>
+
+  <!-- Editor -->
+  <div class="editor">
+    <div class="pane">
+      <div class="pane-head">
+        <span class="pane-label">Input &mdash; paste AI text</span>
+        <span class="word-count" id="inWc">0 words</span>
+      </div>
+      <textarea id="input" placeholder="Paste AI-generated text here&hellip;" spellcheck="false"></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <span class="pane-label">Output &mdash; humanized</span>
+        <span class="word-count" id="outWc">0 words</span>
+      </div>
+      <textarea id="output" readonly placeholder="Humanized text will appear here&hellip;"></textarea>
+    </div>
+  </div>
+
+  <!-- Raw output (toggled) -->
+  <div class="raw-panel" id="rawPanel">
+    <div class="pane-head" style="margin-bottom:6px">
+      <span class="pane-label" style="color:#60a5fa">Raw model output (before post-processing)</span>
+    </div>
+    <textarea id="rawOutput" readonly placeholder="Raw model output&hellip;"></textarea>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn btn-go" id="goBtn">
+      <span class="spinner"></span>
+      <span class="btn-label">Humanize</span>
+    </button>
+    <button class="btn btn-sec" id="copyBtn">Copy output</button>
+    <button class="btn btn-sec" id="clearBtn">Clear</button>
+    <span class="shortcut">Ctrl + Enter</span>
+  </div>
+
+  <!-- Chunk progress -->
+  <div class="progress-section" id="progressSection">
+    <div class="progress-header">Chunk Progress</div>
+    <div class="chunk-bar" id="chunkBar"></div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar" id="statsBar" style="display:none"></div>
+</div>
+
+<script>
+/* ── Helpers ── */
+const $=id=>document.getElementById(id);
+const wc=s=>(s.match(/\S+/g)||[]).length;
+
+/* ── Slider sync ── */
+['wpc','mt','temp','tp','rp'].forEach(id=>{
+  const el=$(id),v=$(id+'V');
+  el.oninput=()=>v.textContent=el.value;
+});
+
+/* ── Show-raw toggle ── */
+$('showRaw').onchange=function(){$('rawPanel').style.display=this.checked?'block':'none'};
+
+/* ── Live word count on input ── */
+$('input').oninput=function(){$('inWc').textContent=wc(this.value)+' words'};
+
+/* ── Status check ── */
+fetch('/status').then(r=>r.json()).then(d=>{
+  const b=$('badge');
+  if(d.ready){b.textContent=d.checkpoint;b.classList.add('ready')}
+  else{b.textContent='model not loaded'}
+}).catch(()=>{$('badge').textContent='offline'});
+
+/* ── Keyboard shortcut ── */
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();$('goBtn').click()}});
+
+/* ── Main: Humanize ── */
+$('goBtn').onclick=async function(){
+  const text=$('input').value.trim();
+  if(!text){$('input').focus();return}
+
+  /* Disable & reset */
+  this.disabled=true;
+  $('output').value='';
+  $('rawOutput').value='';
+  $('outWc').textContent='0 words';
+  $('chunkBar').innerHTML='';
+  $('progressSection').style.display='block';
+  $('statsBar').style.display='none';
+  $('statsBar').innerHTML='';
+
+  const body={
+    text,
+    words_per_chunk :+$('wpc').value,
+    max_new_tokens  :+$('mt').value,
+    temperature     :+$('temp').value,
+    top_p           :+$('tp').value,
+    repetition_penalty:+$('rp').value,
+    apply_post      :$('postProcess').checked,
+    show_raw        :$('showRaw').checked
+  };
+
+  let total=0;
+  const results={};
+  const rawResults={};
+
+  try{
+    const resp=await fetch('/humanize_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!resp.ok){const e=await resp.json();alert(e.error||'Server error');this.disabled=false;return}
+
+    const reader=resp.body.getReader();
+    const dec=new TextDecoder();
+    let buf='';
+
+    while(true){
+      const{done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');
+      buf=lines.pop();
+
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        let d;
+        try{d=JSON.parse(line.slice(6))}catch{continue}
+
+        if(d.type==='init'){
+          total=d.total;
+          for(let i=0;i<total;i++){
+            const c=document.createElement('div');
+            c.className='chip running';
+            c.id='chip'+i;
+            c.textContent='#'+(i+1);
+            $('chunkBar').appendChild(c);
+          }
+        }
+        else if(d.type==='chunk'){
+          results[d.idx]=d.result;
+          if(d.raw)rawResults[d.idx]=d.raw;
+
+          /* Update chip */
+          const chip=$('chip'+d.idx);
+          chip.className='chip done';
+          chip.textContent=d.elapsed+'s';
+
+          /* Build output */
+          let out=[],raw=[];
+          for(let i=0;i<total;i++){if(results[i])out.push(results[i]);if(rawResults[i])raw.push(rawResults[i])}
+          $('output').value=out.join('\n\n');
+          $('rawOutput').value=raw.join('\n\n');
+          $('outWc').textContent=wc($('output').value)+' words';
+        }
+        else if(d.type==='error'){
+          const chip=$('chip'+d.idx);
+          chip.className='chip error';
+          chip.textContent='ERR';
+        }
+        else if(d.type==='done'){
+          $('statsBar').style.display='flex';
+          $('statsBar').innerHTML=
+            `<span class="stat">Time: <b>${d.elapsed}s</b></span>`+
+            `<span class="stat">Chunks: <b>${total}</b></span>`+
+            `<span class="stat">Input: <b>${wc(text)} words</b></span>`+
+            `<span class="stat">Output: <b>${wc($('output').value)} words</b></span>`;
+        }
+      }
+    }
+  }catch(err){
+    console.error(err);
+    alert('Connection error — see console');
+  }
+
+  this.disabled=false;
+};
+
+/* ── Copy ── */
+$('copyBtn').onclick=()=>{
+  navigator.clipboard.writeText($('output').value).then(()=>{
+    const b=$('copyBtn');b.textContent='Copied!';setTimeout(()=>b.textContent='Copy output',1500);
+  });
+};
+
+/* ── Clear ── */
+$('clearBtn').onclick=()=>{
+  $('input').value='';$('output').value='';$('rawOutput').value='';
+  $('inWc').textContent='0 words';$('outWc').textContent='0 words';
+  $('chunkBar').innerHTML='';$('progressSection').style.display='none';
+  $('statsBar').style.display='none';$('statsBar').innerHTML='';
+};
+</script>
+</body>
+</html>

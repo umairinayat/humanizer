@@ -41,6 +41,7 @@ from config import (
     BASE_MODEL,
     CHECKPOINT_DIR,
     DATA,
+    DATA_DIR,
     DATASETS,
     LOG_DIR,
     LORA,
@@ -506,7 +507,7 @@ def step_train(args):
         eval_strategy=TRAINING["eval_strategy"] if val_ds else "no",
         eval_steps=TRAINING["eval_steps"] if val_ds else None,
         save_strategy=TRAINING["save_strategy"],
-        save_steps=TRAINING["eval_steps"],  # must be multiple of eval_steps
+        save_steps=TRAINING["save_steps"],
         save_total_limit=TRAINING["save_total_limit"],
         load_best_model_at_end=TRAINING["load_best_model_at_end"] if val_ds else False,
         metric_for_best_model=TRAINING["metric_for_best_model"] if val_ds else None,
@@ -532,13 +533,27 @@ def step_train(args):
         formatting_func=formatting_func,
     )
 
+    # Auto-detect latest checkpoint if no explicit path given
+    def find_latest_checkpoint(checkpoint_dir: Path):
+        """Return the latest checkpoint directory, or None if none exist."""
+        if not checkpoint_dir.exists():
+            return None
+        checkpoints = sorted(
+            [d for d in checkpoint_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")],
+            key=lambda d: int(d.name.split("-")[-1]),
+        )
+        return str(checkpoints[-1]) if checkpoints else None
+
+    resume_path = args.resume_from or find_latest_checkpoint(CHECKPOINT_DIR)
+
     # Train
     log.info("\n-- Starting Training --")
     start_time = time.time()
-    if args.resume_from:
-        log.info("  Resuming from checkpoint: %s", args.resume_from)
-        trainer.train(resume_from_checkpoint=args.resume_from)
+    if resume_path:
+        log.info("  Resuming from checkpoint: %s", resume_path)
+        trainer.train(resume_from_checkpoint=resume_path)
     else:
+        log.info("  Starting fresh training run")
         trainer.train()
     elapsed = time.time() - start_time
     log.info("Training completed in %.1f minutes", elapsed / 60)
