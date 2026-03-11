@@ -227,13 +227,18 @@ def api_humanize():
 
     results = [r.replace("  ", " ").strip() for r in results]
     output  = "\n\n".join(results)
+
+    # Trim output to match input word count exactly
+    input_word_count  = len(text.split())
+    output_words      = output.split()
+    if len(output_words) > input_word_count:
+        output = " ".join(output_words[:input_word_count])
+
     elapsed = round(time.time() - start, 2)
 
     return jsonify({
-        "output":       output,
-        "input_words":  len(text.split()),
-        "output_words": len(output.split()),
-        "elapsed":      elapsed,
+        "output":  output,
+        "elapsed": elapsed,
     })
 
 
