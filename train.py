@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -19,9 +20,12 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
     TrainingArguments,
 )
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 
 from config import (
     ADAPTER_DIR,
@@ -44,6 +48,49 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger(__name__)
+
+
+class ProgressLogger(TrainerCallback):
+    """Writes every logged step to train.log so progress is always visible."""
+
+    def __init__(self, total_steps: int):
+        self._total = total_steps
+        self._start = time.time()
+
+    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+        if logs is None or state.global_step == 0:
+            return
+        elapsed = time.time() - self._start
+        pct = 100.0 * state.global_step / self._total
+        eta_s = (elapsed / state.global_step) * (self._total - state.global_step)
+        eta_min = eta_s / 60
+
+        loss     = logs.get("loss", logs.get("train_loss", "—"))
+        lr       = logs.get("learning_rate", "—")
+        grad     = logs.get("grad_norm", "—")
+
+        if isinstance(loss, float):
+            loss = f"{loss:.4f}"
+        if isinstance(lr, float):
+            lr = f"{lr:.2e}"
+        if isinstance(grad, float):
+            grad = f"{grad:.3f}"
+
+        log.info(
+            "step %d/%d (%.1f%%)  loss=%s  lr=%s  grad=%s  ETA=%.0f min",
+            state.global_step, self._total, pct, loss, lr, grad, eta_min,
+        )
+
+    def on_evaluate(self, args, state: TrainerState, control, metrics=None, **kwargs):
+        if metrics:
+            log.info(
+                "── EVAL step %d  eval_loss=%.4f",
+                state.global_step,
+                metrics.get("eval_loss", float("nan")),
+            )
+
+    def on_save(self, args, state: TrainerState, control, **kwargs):
+        log.info("── CHECKPOINT saved  step %d → %s", state.global_step, args.output_dir)
 
 
 def load_sft_dataset(path: Path) -> Dataset:
@@ -165,20 +212,21 @@ def main():
     trainable, total = model.get_nb_trainable_parameters()
     log.info(f"  Trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)")
 
-    # ── Format dataset ────────────────────────────────────────────────
-    def formatting_func(examples):
-        output = []
-        for i in range(len(examples["user"])):
-            example = {
-                "system": examples["system"][i] if "system" in examples else SYSTEM_PROMPT,
-                "user": examples["user"][i],
-                "assistant": examples["assistant"][i],
-            }
-            output.append(format_chat(example, tokenizer))
-        return output
+    # ── Pre-format datasets to avoid TRL batched add_eos bug ─────────
+    # TRL 0.29 formatting_func runs in batched map mode but add_eos
+    # treats example["text"] as a scalar string — pre-add text column.
+    def add_text_column(example):
+        example["text"] = format_chat(example, tokenizer)
+        return example
+
+    log.info("Formatting train dataset...")
+    train_ds = train_ds.map(add_text_column, num_proc=4)
+    if val_ds:
+        log.info("Formatting val dataset...")
+        val_ds = val_ds.map(add_text_column, num_proc=4)
 
     # ── Training arguments ────────────────────────────────────────────
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=str(CHECKPOINT_DIR),
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -204,11 +252,16 @@ def main():
         report_to=report_to,
         seed=TRAINING["seed"],
         dataloader_num_workers=TRAINING["dataloader_num_workers"],
-        group_by_length=TRAINING["group_by_length"],
         gradient_checkpointing=TRAINING["gradient_checkpointing"],
         optim=TRAINING["optim"],
-        remove_unused_columns=False,
+        dataset_text_field="text",
+        max_length=args.max_seq_length,
+        packing=False,
     )
+
+    # ── Total steps (for ETA in progress logger) ─────────────────────
+    steps_per_epoch = len(train_ds) // (args.batch_size * TRAINING["gradient_accumulation_steps"])
+    total_steps = steps_per_epoch * args.epochs
 
     # ── Trainer ───────────────────────────────────────────────────────
     trainer = SFTTrainer(
@@ -216,10 +269,8 @@ def main():
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tokenizer,
-        formatting_func=formatting_func,
-        max_seq_length=args.max_seq_length,
-        packing=False,
+        processing_class=tokenizer,
+        callbacks=[ProgressLogger(total_steps)],
     )
 
     # ── Train ─────────────────────────────────────────────────────────

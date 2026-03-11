@@ -194,7 +194,7 @@ fetch('/status').then(r=>r.json()).then(d=>{
 /* ── Keyboard shortcut ── */
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();$('goBtn').click()}});
 
-/* ── Main: Humanize ── */
+/* ── Main: Humanize (batched — all chunks in one GPU call) ── */
 $('goBtn').onclick=async function(){
   const text=$('input').value.trim();
   if(!text){$('input').focus();return}
@@ -209,82 +209,51 @@ $('goBtn').onclick=async function(){
   $('statsBar').style.display='none';
   $('statsBar').innerHTML='';
 
+  const wpc=+$('wpc').value;
+  const words=text.split(/\s+/).filter(Boolean);
+  const totalChunks=Math.ceil(words.length/wpc);
+
+  /* Show all chips as "running" immediately */
+  for(let i=0;i<totalChunks;i++){
+    const c=document.createElement('div');
+    c.className='chip running';
+    c.id='chip'+i;
+    c.textContent='#'+(i+1);
+    $('chunkBar').appendChild(c);
+  }
+
   const body={
     text,
-    words_per_chunk :+$('wpc').value,
+    words_per_chunk :wpc,
     max_new_tokens  :+$('mt').value,
     temperature     :+$('temp').value,
     top_p           :+$('tp').value,
     repetition_penalty:+$('rp').value,
     apply_post      :$('postProcess').checked,
-    show_raw        :$('showRaw').checked
   };
 
-  let total=0;
-  const results={};
-  const rawResults={};
-
   try{
-    const resp=await fetch('/humanize_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!resp.ok){const e=await resp.json();alert(e.error||'Server error');this.disabled=false;return}
+    const resp=await fetch('/humanize_batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await resp.json();
+    if(!resp.ok){alert(d.error||'Server error');this.disabled=false;return}
 
-    const reader=resp.body.getReader();
-    const dec=new TextDecoder();
-    let buf='';
-
-    while(true){
-      const{done,value}=await reader.read();
-      if(done)break;
-      buf+=dec.decode(value,{stream:true});
-      const lines=buf.split('\n');
-      buf=lines.pop();
-
-      for(const line of lines){
-        if(!line.startsWith('data: '))continue;
-        let d;
-        try{d=JSON.parse(line.slice(6))}catch{continue}
-
-        if(d.type==='init'){
-          total=d.total;
-          for(let i=0;i<total;i++){
-            const c=document.createElement('div');
-            c.className='chip running';
-            c.id='chip'+i;
-            c.textContent='#'+(i+1);
-            $('chunkBar').appendChild(c);
-          }
-        }
-        else if(d.type==='chunk'){
-          results[d.idx]=d.result;
-          if(d.raw)rawResults[d.idx]=d.raw;
-
-          /* Update chip */
-          const chip=$('chip'+d.idx);
-          chip.className='chip done';
-          chip.textContent=d.elapsed+'s';
-
-          /* Build output */
-          let out=[],raw=[];
-          for(let i=0;i<total;i++){if(results[i])out.push(results[i]);if(rawResults[i])raw.push(rawResults[i])}
-          $('output').value=out.join('\n\n');
-          $('rawOutput').value=raw.join('\n\n');
-          $('outWc').textContent=wc($('output').value)+' words';
-        }
-        else if(d.type==='error'){
-          const chip=$('chip'+d.idx);
-          chip.className='chip error';
-          chip.textContent='ERR';
-        }
-        else if(d.type==='done'){
-          $('statsBar').style.display='flex';
-          $('statsBar').innerHTML=
-            `<span class="stat">Time: <b>${d.elapsed}s</b></span>`+
-            `<span class="stat">Chunks: <b>${total}</b></span>`+
-            `<span class="stat">Input: <b>${wc(text)} words</b></span>`+
-            `<span class="stat">Output: <b>${wc($('output').value)} words</b></span>`;
-        }
-      }
+    /* All chunks done — mark all chips green */
+    for(let i=0;i<d.total_chunks;i++){
+      const chip=$('chip'+i);
+      chip.className='chip done';
+      chip.textContent='✓';
     }
+
+    $('output').value=d.combined;
+    $('outWc').textContent=wc(d.combined)+' words';
+
+    $('statsBar').style.display='flex';
+    $('statsBar').innerHTML=
+      `<span class="stat">Time: <b>${d.elapsed}s</b></span>`+
+      `<span class="stat">Chunks: <b>${d.total_chunks}</b></span>`+
+      `<span class="stat">Input: <b>${wc(text)} words</b></span>`+
+      `<span class="stat">Output: <b>${wc(d.combined)} words</b></span>`;
+
   }catch(err){
     console.error(err);
     alert('Connection error — see console');

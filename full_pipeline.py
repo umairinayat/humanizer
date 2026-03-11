@@ -479,17 +479,20 @@ def step_train(args):
     pct = 100 * trainable / total
     log.info("  Trainable params: %s / %s (%.2f%%)", f"{trainable:,}", f"{total:,}", pct)
 
-    # Format dataset
-    def formatting_func(example):
-        chat_example = {
-            "system": example.get("system", SYSTEM_PROMPT),
-            "user": example["user"],
-            "assistant": example["assistant"],
-        }
-        return format_chat(chat_example, tokenizer)
+    # Pre-format datasets to avoid TRL batched add_eos bug.
+    # TRL 0.29 formatting_func runs in batched map but add_eos treats
+    # example["text"] as a scalar string — pre-add text column instead.
+    def add_text_column(example):
+        example["text"] = format_chat(example, tokenizer)
+        return example
+
+    log.info("Formatting train dataset...")
+    train_ds = train_ds.map(add_text_column, num_proc=4)
+    if val_ds:
+        log.info("Formatting val dataset...")
+        val_ds = val_ds.map(add_text_column, num_proc=4)
 
     # Training arguments
-
     training_args = SFTConfig(
         output_dir=str(CHECKPOINT_DIR),
         num_train_epochs=args.epochs,
@@ -517,8 +520,7 @@ def step_train(args):
         dataloader_num_workers=TRAINING["dataloader_num_workers"],
         gradient_checkpointing=TRAINING["gradient_checkpointing"],
         optim=TRAINING["optim"],
-        remove_unused_columns=False,
-        # SFT-specific
+        dataset_text_field="text",
         max_length=args.max_seq_length,
         packing=False,
     )
@@ -530,7 +532,6 @@ def step_train(args):
         train_dataset=train_ds,
         eval_dataset=val_ds,
         processing_class=tokenizer,
-        formatting_func=formatting_func,
     )
 
     # Auto-detect latest checkpoint if no explicit path given

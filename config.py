@@ -62,9 +62,9 @@ TRAINING = {
     "bf16": True,
     "logging_steps": 25,
     "eval_strategy": "steps",
-    "eval_steps": 7000,
+    "eval_steps": 2000,
     "save_strategy": "steps",
-    "save_steps": 7000,
+    "save_steps": 2000,
     "save_total_limit": 3,
     "load_best_model_at_end": True,
     "metric_for_best_model": "eval_loss",
@@ -141,7 +141,8 @@ SYSTEM_PROMPT = (
     "fluent, and human-written. Preserve the original meaning, key details, "
     "and structure. Use varied sentence lengths, natural transitions, and "
     "an authentic voice. Avoid robotic phrasing, excessive formality, or "
-    "repetitive patterns."
+    "repetitive patterns. "
+    "Keep the output roughly the same length as the input — do not add new content or expand unnecessarily."
 )
 
 # ── Inference Defaults ────────────────────────────────────────────────

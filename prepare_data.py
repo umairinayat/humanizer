@@ -97,19 +97,19 @@ def jaccard_similarity(set_a: set, set_b: set) -> float:
     return len(set_a & set_b) / len(set_a | set_b)
 
 
-def deduplicate(texts: list[dict], threshold: float) -> list[dict]:
-    """Exact + near-duplicate removal."""
-    log.info(f"  Deduplicating {len(texts)} texts (threshold={threshold})...")
+def deduplicate(pairs: list[dict], threshold: float) -> list[dict]:
+    """Exact + near-duplicate removal based on human text."""
+    log.info(f"  Deduplicating {len(pairs)} pairs (threshold={threshold})...")
 
     # Exact dedup
     seen_hashes = set()
     exact_deduped = []
-    for item in texts:
-        h = compute_hash(item["text"])
+    for item in pairs:
+        h = compute_hash(item["human_text"])  # Deduplicate based on the human target
         if h not in seen_hashes:
             seen_hashes.add(h)
             exact_deduped.append(item)
-    log.info(f"  After exact dedup: {len(exact_deduped)} (removed {len(texts) - len(exact_deduped)})")
+    log.info(f"  After exact dedup: {len(exact_deduped)} (removed {len(pairs) - len(exact_deduped)})")
 
     # Near dedup — sample-based for large datasets to keep it tractable
     if len(exact_deduped) > 50000:
@@ -120,7 +120,7 @@ def deduplicate(texts: list[dict], threshold: float) -> list[dict]:
     ngrams_cache = []
     kept = []
     for item in tqdm(exact_deduped, desc="  Near-dedup"):
-        item_ngrams = ngram_set(item["text"])
+        item_ngrams = ngram_set(item["human_text"])
         is_dup = False
         for existing_ngrams in ngrams_cache[-500:]:  # compare against recent 500
             if jaccard_similarity(item_ngrams, existing_ngrams) > threshold:
@@ -142,18 +142,23 @@ def create_sft_pairs(texts: list[dict]) -> list[dict]:
 
     Format:
     - system: writing instruction
-    - user: "Rewrite this text naturally: {text}"
-    - assistant: {text}  (the human text IS the target)
-
-    The model learns to produce human-like text when asked to rewrite.
+    - user: "Rewrite this text naturally: {ai_text}"
+    - assistant: {human_text}
+    
+    The model learns to map AI-generated text to human-written text.
     """
     sft_data = []
     for item in texts:
-        text = item["text"]
+        ai_text = item.get("ai_text", "")
+        human_text = item.get("human_text", "")
+        
+        if not ai_text or not human_text:
+            continue
+            
         sft_example = {
             "system": SYSTEM_PROMPT,
-            "user": f"Rewrite the following text in a natural, human-written style:\n\n{text}",
-            "assistant": text,
+            "user": f"Rewrite the following text in a natural, human-written style:\n\n{ai_text}",
+            "assistant": human_text,
             "source": item.get("source", "unknown"),
         }
         sft_data.append(sft_example)
@@ -167,11 +172,11 @@ def main():
     log.info("STEP 2: Clean, deduplicate, and prepare SFT dataset")
     log.info("=" * 60)
 
-    # Load all raw files
-    all_texts = []
-    raw_files = list(RAW_DIR.glob("*.jsonl"))
+    # Load all raw pairs
+    all_pairs = []
+    raw_files = list(RAW_DIR.glob("*_pairs.jsonl"))
     if not raw_files:
-        log.error(f"No raw JSONL files found in {RAW_DIR}. Run download_datasets.py first.")
+        log.error(f"No paired JSONL files found in {RAW_DIR}. Run download_datasets.py first.")
         return
 
     for raw_file in raw_files:
@@ -180,25 +185,32 @@ def main():
             for line in f:
                 try:
                     row = json.loads(line.strip())
-                    all_texts.append(row)
+                    all_pairs.append(row)
                     count += 1
                 except json.JSONDecodeError:
                     continue
-        log.info(f"  Loaded {count:,} texts from {raw_file.name}")
+        log.info(f"  Loaded {count:,} pairs from {raw_file.name}")
 
-    log.info(f"\nTotal raw texts: {len(all_texts):,}")
+    log.info(f"\nTotal raw pairs: {len(all_pairs):,}")
 
     # Clean
     log.info("\n── Cleaning ──")
     cleaned = []
-    for item in tqdm(all_texts, desc="Cleaning"):
-        text = clean_text(item["text"])
-        if is_valid_text(text):
-            cleaned.append({"text": text, "source": item.get("source", "unknown")})
+    for item in tqdm(all_pairs, desc="Cleaning"):
+        ai_text = clean_text(item.get("ai_text", ""))
+        human_text = clean_text(item.get("human_text", ""))
+        
+        # Only keep pairs where BOTH are valid
+        if is_valid_text(ai_text) and is_valid_text(human_text):
+            cleaned.append({
+                "ai_text": ai_text, 
+                "human_text": human_text, 
+                "source": item.get("source", "unknown")
+            })
 
-    log.info(f"After cleaning: {len(cleaned):,} (removed {len(all_texts) - len(cleaned):,})")
+    log.info(f"After cleaning: {len(cleaned):,} (removed {len(all_pairs) - len(cleaned):,})")
 
-    # Deduplicate
+    # Deduplicate based on Human text targets
     log.info("\n── Deduplication ──")
     deduped = deduplicate(cleaned, DATA["dedup_threshold"])
     log.info(f"After dedup: {len(deduped):,}")
@@ -241,7 +253,7 @@ def main():
     # Stats
     log.info(f"\n{'=' * 60}")
     log.info("DATA PREPARATION COMPLETE")
-    log.info(f"  Raw texts loaded:    {len(all_texts):,}")
+    log.info(f"  Raw pairs loaded:    {len(all_pairs):,}")
     log.info(f"  After cleaning:      {len(cleaned):,}")
     log.info(f"  After dedup:         {len(deduped):,}")
     log.info(f"  Train examples:      {len(train_data):,}")

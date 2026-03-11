@@ -26,30 +26,22 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def extract_human_texts(ds_config: dict) -> list[str]:
-    """Load a HF dataset and return only human-written texts."""
+def extract_human_pairs(ds_config: dict) -> list[dict]:
+    """Load a HF dataset and return AI -> Human paired texts."""
     repo = ds_config["repo"]
-    text_col = ds_config["text_col"]
-    label_col = ds_config["label_col"]
-    human_value = ds_config["human_value"]
-    subset = ds_config["subset"]
     split = ds_config["split"]
-
-    log.info(f"Loading {repo} (split={split}, subset={subset})...")
+    subset = ds_config["subset"]
+    name = ds_config["name"]
+    
+    log.info(f"Loading {repo} (split={split})...")
 
     try:
-        if subset:
-            ds = load_dataset(repo, subset, split=split, trust_remote_code=True)
-        else:
-            ds = load_dataset(repo, split=split, trust_remote_code=True)
+        ds = load_dataset(repo, subset, split=split) if subset else load_dataset(repo, split=split)
     except Exception as e:
         log.warning(f"Failed to load split='{split}' for {repo}: {e}")
-        log.info(f"Trying to load {repo} without specifying split...")
         try:
-            ds = load_dataset(repo, trust_remote_code=True)
-            # Take the first available split
+            ds = load_dataset(repo)
             available_splits = list(ds.keys())
-            log.info(f"Available splits: {available_splits}")
             ds = ds[available_splits[0]]
         except Exception as e2:
             log.error(f"Failed to load {repo}: {e2}")
@@ -57,65 +49,76 @@ def extract_human_texts(ds_config: dict) -> list[str]:
 
     log.info(f"  Loaded {len(ds)} rows. Columns: {ds.column_names}")
 
-    # Detect text column if the configured one doesn't exist
-    if text_col not in ds.column_names:
-        candidates = ["text", "content", "generation", "Text", "article", "document"]
-        found = [c for c in candidates if c in ds.column_names]
-        if found:
-            text_col = found[0]
-            log.warning(f"  Column '{ds_config['text_col']}' not found. Using '{text_col}'.")
-        else:
-            log.error(f"  No text column found in {ds.column_names}. Skipping.")
-            return []
-
-    texts = []
-
-    if label_col is None:
-        # All rows are human (e.g., wikipedia_human_written_text)
-        for row in tqdm(ds, desc=f"  Extracting [{ds_config['name']}]"):
-            t = row.get(text_col, "")
-            if t and isinstance(t, str) and len(t.strip()) > 0:
-                texts.append(t.strip())
+    pairs = []
+    
+    if name == "dmitva/human_ai_generated_text" or repo == "dmitva/human_ai_generated_text":
+        # Contains direct parallel pairs: human_text vs ai_text
+        for row in tqdm(ds, desc=f"  Extracting [{name}]"):
+            ht = row.get("human_text", "")
+            at = row.get("ai_text", "")
+            if ht and at and len(ht.strip()) > 0 and len(at.strip()) > 0:
+                pairs.append({"human_text": ht.strip(), "ai_text": at.strip()})
+                
+    elif name == "raid" or repo == "liamdugan/raid":
+        # Not perfectly paired, but we can match prompts
+        # Let's collect human text per prompt, and AI text per prompt
+        prompts_to_human = {}
+        ai_entries = []
+        for row in tqdm(ds, desc=f"  Buffering [{name}]"):
+            model = row.get("model")
+            prompt = row.get("prompt", "")
+            generation = row.get("generation", "")
+            if not generation or not prompt:
+                continue
+            if model == "human":
+                prompts_to_human[prompt] = generation.strip()
+            else:
+                ai_entries.append((prompt, generation.strip()))
+                
+        # Now pair them
+        for prompt, at in ai_entries:
+            if prompt in prompts_to_human:
+                ht = prompts_to_human[prompt]
+                if ht and at:
+                    pairs.append({"human_text": ht, "ai_text": at})
+                    
+    elif name == "ai_and_human_text" or repo == "NabeelShar/ai_and_human_text":
+        # Single text column with generated label. No explicit pairs.
+        # We can loosely pair text that shares a prompt_name.
+        prompts_to_human = {}
+        ai_entries = []
+        for row in tqdm(ds, desc=f"  Buffering [{name}]"):
+            text = row.get("text", "")
+            gen = row.get("generated")
+            prompt = row.get("prompt_name", "")
+            if not text or prompt is None:
+                continue
+            if int(gen) == 0:
+                prompts_to_human[prompt] = text.strip()
+            elif int(gen) == 1:
+                ai_entries.append((prompt, text.strip()))
+                
+        for prompt, at in ai_entries:
+            if prompt in prompts_to_human:
+                ht = prompts_to_human[prompt]
+                if ht and at:
+                    pairs.append({"human_text": ht, "ai_text": at})
+                    
     else:
-        # Filter by label
-        if label_col not in ds.column_names:
-            # Try case-insensitive match
-            col_map = {c.lower(): c for c in ds.column_names}
-            if label_col.lower() in col_map:
-                label_col = col_map[label_col.lower()]
-                log.warning(f"  Using case-matched label column: '{label_col}'")
-            else:
-                log.error(f"  Label column '{label_col}' not found in {ds.column_names}. Skipping.")
-                return []
+        log.warning(f"  Dataset {name} does not support pairing (AI/Human pairs not found). Skipping direct parallel export.")
 
-        for row in tqdm(ds, desc=f"  Extracting [{ds_config['name']}]"):
-            label = row.get(label_col)
-            # Handle string or int comparison
-            if isinstance(human_value, str):
-                is_human = str(label).lower().strip() == human_value.lower().strip()
-            else:
-                try:
-                    is_human = int(label) == human_value
-                except (ValueError, TypeError):
-                    is_human = label == human_value
+    log.info(f"  Extracted {len(pairs)} pairs from {name}")
+    return pairs
 
-            if is_human:
-                t = row.get(text_col, "")
-                if t and isinstance(t, str) and len(t.strip()) > 0:
-                    texts.append(t.strip())
-
-    log.info(f"  Extracted {len(texts)} human texts from {ds_config['name']}")
-    return texts
-
-
-def save_raw(name: str, texts: list[str], output_dir: Path) -> Path:
-    """Save extracted texts to a JSONL file."""
-    out_path = output_dir / f"{name}.jsonl"
+def save_raw(name: str, pairs: list[dict], output_dir: Path) -> Path:
+    """Save extracted pairs to a JSONL file."""
+    out_path = output_dir / f"{name}_pairs.jsonl"
     with open(out_path, "w", encoding="utf-8") as f:
-        for text in texts:
-            json.dump({"text": text, "source": name}, f, ensure_ascii=False)
+        for pair in pairs:
+            # We save ai_text and human_text
+            json.dump({"ai_text": pair["ai_text"], "human_text": pair["human_text"], "source": name}, f, ensure_ascii=False)
             f.write("\n")
-    log.info(f"  Saved {len(texts)} texts → {out_path}")
+    log.info(f"  Saved {len(pairs)} paired texts → {out_path}")
     return out_path
 
 
@@ -130,15 +133,15 @@ def main():
         log.info(f"Dataset: {ds_config['name']} ({ds_config['repo']})")
         log.info(f"{'─' * 40}")
 
-        texts = extract_human_texts(ds_config)
-        if texts:
-            save_raw(ds_config["name"], texts, RAW_DIR)
-            total += len(texts)
+        pairs = extract_human_pairs(ds_config)
+        if pairs:
+            save_raw(ds_config["name"], pairs, RAW_DIR)
+            total += len(pairs)
         else:
-            log.warning(f"  No human texts extracted from {ds_config['name']}")
+            log.warning(f"  No pairs extracted from {ds_config['name']}")
 
     log.info(f"\n{'=' * 60}")
-    log.info(f"TOTAL HUMAN TEXTS EXTRACTED: {total:,}")
+    log.info(f"TOTAL PAIRS EXTRACTED: {total:,}")
     log.info(f"Raw files saved to: {RAW_DIR}")
     log.info(f"{'=' * 60}")
 

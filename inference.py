@@ -97,8 +97,17 @@ def humanize(
 
     inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
 
+    # Cap output to ~input length: base on raw text word count (not full prompt tokens).
+    # ~1.35 tokens/word, 10% headroom. This cap is always enforced — even if the caller
+    # passes a higher max_new_tokens (e.g. from the UI slider).
+    content_word_count = len(text.split())
+    content_token_est = int(content_word_count * 1.35)
+    dynamic_cap = max(64, int(content_token_est * 1.10))
+
+    effective_max = min(max_new_tokens or GENERATION["max_new_tokens"], dynamic_cap)
+
     gen_kwargs = {
-        "max_new_tokens": max_new_tokens or GENERATION["max_new_tokens"],
+        "max_new_tokens": effective_max,
         "temperature": temperature or GENERATION["temperature"],
         "top_p": GENERATION["top_p"],
         "top_k": GENERATION["top_k"],
@@ -112,6 +121,71 @@ def humanize(
 
     new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
     return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+
+def humanize_batch(
+    texts: list,
+    model=None,
+    tokenizer=None,
+    temperature: float = None,
+    max_new_tokens: int = None,
+) -> list:
+    """Process multiple chunks in a single batched GPU call — faster than sequential."""
+    if model is None or tokenizer is None:
+        model, tokenizer = load_model()
+
+    # Build one prompt per chunk and compute per-chunk dynamic cap
+    prompts = []
+    dynamic_caps = []
+    for text in texts:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Rewrite the following text in a natural, human-written style:\n\n{text}"},
+        ]
+        try:
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        except Exception:
+            prompt = (
+                f"<|system|>\n{SYSTEM_PROMPT}\n"
+                f"<|user|>\nRewrite the following text in a natural, human-written style:\n\n{text}\n"
+                f"<|assistant|>\n"
+            )
+        prompts.append(prompt)
+
+        content_word_count = len(text.split())
+        content_token_est = int(content_word_count * 1.35)
+        dynamic_caps.append(max(64, int(content_token_est * 1.10)))
+
+    # Use the largest cap across chunks so no chunk gets cut short
+    effective_max = min(max_new_tokens or GENERATION["max_new_tokens"], max(dynamic_caps))
+
+    # Left-pad so all sequences are the same length (required for batched generate)
+    orig_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(model.device)
+    tokenizer.padding_side = orig_padding_side
+
+    gen_kwargs = {
+        "max_new_tokens": effective_max,
+        "temperature": temperature or GENERATION["temperature"],
+        "top_p": GENERATION["top_p"],
+        "top_k": GENERATION["top_k"],
+        "repetition_penalty": GENERATION["repetition_penalty"],
+        "do_sample": GENERATION["do_sample"],
+        "pad_token_id": tokenizer.pad_token_id,
+    }
+
+    with torch.no_grad():
+        outputs = model.generate(**inputs, **gen_kwargs)
+
+    # Each output includes the (padded) input; strip it
+    prompt_len = inputs["input_ids"].shape[1]
+    results = []
+    for output in outputs:
+        new_tokens = output[prompt_len:]
+        results.append(tokenizer.decode(new_tokens, skip_special_tokens=True).strip())
+
+    return results
 
 
 def interactive_mode():
